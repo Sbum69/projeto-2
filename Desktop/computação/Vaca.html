@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vaca Articulada</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+</head>
+<style>
+    body {
+        margin: 0;
+        overflow: hidden;
+        background: #87ceeb; /* mesmo azul do renderer */
+    }
+    canvas {
+        display: block;
+    }
+</style>
+<body>
+<script>
+let isJumping = false;
+let jumpTime = 0;
+let ufo; // grupo do OVNI
+let headAngleY = 0; // rotação atual da cabeça em Y (para controlo via teclado)
+let ufoBeam; // feixe de luz do OVNI
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let camera1, camera2, activeCamera;
+
+
+
+// Variáveis principais
+let scene, camera, renderer;
+let cow, body, headPivot, head, tailPivot, tail;
+let legFL, legFR, legBL, legBR;
+let earL, earR;
+
+// Relógio para animações
+let clock = new THREE.Clock();
+
+init();
+animate();
+
+function init() {
+    // Cena
+    scene = new THREE.Scene();
+
+    // Câmara 1 – vista normal
+camera1 = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+);
+camera1.position.set(0, 3, 10);
+camera1.lookAt(0, 1.5, 0);
+
+// Câmara 2 – vista de cima
+camera2 = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+);
+camera2.position.set(0, 20, 0);
+camera2.lookAt(0, 0, 0);
+
+activeCamera = camera1;
+
+
+    // Renderer + sombras
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x87ceeb); // azul céu
+    renderer.shadowMap.enabled = true;                     // ativar sombras
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;      // sombras suaves
+    document.body.appendChild(renderer.domElement);
+    document.addEventListener('mousedown', onMouseDown);
+
+    // ===== LUZES =====
+
+    // Luz ambiente fraca (iluminação geral)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    scene.add(ambientLight);
+
+    // Luz direcional tipo "sol"
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(5, 10, 5);
+    dirLight.castShadow = true;
+
+    // Configuração básica das sombras da luz
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 50;
+    dirLight.shadow.camera.left = -10;
+    dirLight.shadow.camera.right = 10;
+    dirLight.shadow.camera.top = 10;
+    dirLight.shadow.camera.bottom = -10;
+
+    scene.add(dirLight);
+
+//CHÃO 
+const loader = new THREE.TextureLoader();
+const grassTex = loader.load('verde/Grass005_1K-JPG_Color.jpg'); // caminho relativo
+
+grassTex.wrapS = THREE.RepeatWrapping;
+grassTex.wrapT = THREE.RepeatWrapping;
+
+const groundGeo = new THREE.PlaneGeometry(40, 40);
+const groundMat = new THREE.MeshPhongMaterial({ map: grassTex });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+
+    // Criar vaca articulada
+    createCow();
+    // Criar OVNI
+    createUFO();
+    // Criar árvores em volta do campo
+    createTrees();
+
+    window.addEventListener('resize', onWindowResize);
+    document.addEventListener('keydown', onKeyDown);
+}
+
+function createTrees() {
+    const loader = new THREE.TextureLoader();
+    const woodTex = loader.load('Tronco/Wood092_1K-JPG_Color.jpg');
+
+    woodTex.wrapS = THREE.RepeatWrapping;
+    woodTex.wrapT = THREE.RepeatWrapping;
+    woodTex.repeat.set(1, 2); // opcional, ajusta como quiseres
+
+    const trunkMat = new THREE.MeshPhongMaterial({
+        map: woodTex,
+        shininess: 20
+    });
+
+    const leavesMat = new THREE.MeshPhongMaterial({ color: 0x2e8b57 });
+
+    const trunkGeo  = new THREE.CylinderGeometry(0.2, 0.25, 2, 8);
+    const leavesGeo = new THREE.ConeGeometry(1, 2.5, 12);
+
+    const numTrees = 10;
+    const radius = 12; // distância da origem
+
+    for (let i = 0; i < numTrees; i++) {
+        const angle = (i / numTrees) * Math.PI * 2;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+
+        const tree = new THREE.Group();
+
+        // Tronco
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+        trunk.position.set(0, 1, 0); // metade da altura
+        trunk.castShadow = true;
+        trunk.receiveShadow = true;
+        tree.add(trunk);
+
+        // Copa
+        const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+        leaves.position.set(0, 2.5, 0);
+        leaves.castShadow = true;
+        leaves.receiveShadow = false;
+        tree.add(leaves);
+
+        tree.position.set(x, 0, z);
+        scene.add(tree);
+    }
+}
+
+function createUFO() {
+    ufo = new THREE.Group();
+    scene.add(ufo);
+
+    // Materiais do OVNI
+    const metalMat = new THREE.MeshPhongMaterial({ color: 0x888888, shininess: 80 });
+    const glassMat = new THREE.MeshPhongMaterial({ color: 0x88ccee, shininess: 100, transparent: true, opacity: 0.7 });
+    const lightMat = new THREE.MeshPhongMaterial({ color: 0xffff66, emissive: 0xffff22 });
+
+    // Disco principal (cilindro achatado)
+    const diskGeo = new THREE.CylinderGeometry(2.5, 2.5, 0.4, 32);
+    const disk = new THREE.Mesh(diskGeo, metalMat);
+    disk.castShadow = true;
+    disk.receiveShadow = true;
+    ufo.add(disk);
+
+    // Cúpula (meia esfera em cima)
+    const domeGeo = new THREE.SphereGeometry(1.2, 32, 16);
+    const dome = new THREE.Mesh(domeGeo, glassMat);
+    dome.position.set(0, 0.9, 0);
+    dome.castShadow = true;
+    ufo.add(dome);
+
+    // Luzes à volta do disco
+    const lightGeo = new THREE.SphereGeometry(0.15, 8, 8);
+    const numLights = 8;
+    const radius = 2.1;
+
+    for (let i = 0; i < numLights; i++) {
+        const angle = (i / numLights) * Math.PI * 2;
+        const lx = Math.cos(angle) * radius;
+        const lz = Math.sin(angle) * radius;
+
+        const bulb = new THREE.Mesh(lightGeo, lightMat);
+        bulb.position.set(lx, -0.15, lz);
+        bulb.castShadow = true;
+        ufo.add(bulb);
+    }
+
+    // cone que representa a luz do OVNI
+    const beamMat = new THREE.MeshPhongMaterial({
+        color: 0x99ffcc,
+        transparent: true,
+        opacity: 0.4,
+        emissive: 0x66ffcc,
+        side: THREE.DoubleSide
+    });
+
+    const beamGeo = new THREE.ConeGeometry(3, 8, 32);
+    ufoBeam = new THREE.Mesh(beamGeo, beamMat);
+    ufoBeam.position.set(0, -4, 0);
+
+    ufoBeam.castShadow = false;
+    ufoBeam.receiveShadow = true;
+
+    ufo.add(ufoBeam);
+
+    // Posicionar o OVNI no céu
+    ufo.position.set(0, 8, 0);
+}
+
+// Cria a hierarquia da vaca
+function createCow() {
+    cow = new THREE.Group();
+    scene.add(cow);
+
+    const loader = new THREE.TextureLoader();
+    const cowTex = loader.load('Xadrez//Tiles016_1K-JPG_Color.jpg');
+
+    const whiteMat = new THREE.MeshPhongMaterial({
+    map: cowTex,
+    shininess: 30
+});
+
+    // materiais com luz
+    const blackMat = new THREE.MeshPhongMaterial({ color: 0x222222, shininess: 10 });
+    const pinkMat  = new THREE.MeshPhongMaterial({ color: 0xffa0a0, shininess: 20 });
+
+    // Corpo
+    const bodyGeo = new THREE.BoxGeometry(3, 1.5, 1);
+    body = new THREE.Mesh(bodyGeo, whiteMat);
+    body.position.set(0, 1.5, 0);
+    body.castShadow = true;
+    cow.add(body);
+
+    // Pivot da cabeça
+    headPivot = new THREE.Object3D();
+    headPivot.position.set(1.5, 1.7, 0);
+    cow.add(headPivot);
+
+    // Cabeça
+    const headGeo = new THREE.BoxGeometry(1, 0.8, 0.8);
+    head = new THREE.Mesh(headGeo, whiteMat);
+    head.position.set(0.5, 0, 0);
+    head.castShadow = true;
+    headPivot.add(head);
+
+    // Orelhas
+    const earGeo = new THREE.BoxGeometry(0.2, 0.4, 0.1);
+    earL = new THREE.Mesh(earGeo, whiteMat);
+    earR = new THREE.Mesh(earGeo, whiteMat);
+
+    earL.position.set(0.2, 0.5, 0.3);
+    earR.position.set(0.2, 0.5, -0.3);
+
+    earL.castShadow = true;
+    earR.castShadow = true;
+
+    head.add(earL);
+    head.add(earR);
+
+    // Focinho
+    const noseGeo = new THREE.BoxGeometry(0.4, 0.3, 0.5);
+    const nose = new THREE.Mesh(noseGeo, pinkMat);
+    nose.position.set(0.5, -0.15, 0);
+    nose.castShadow = true;
+    head.add(nose);
+
+    // Olhos simples (dois pontinhos pretos)
+    const eyeMat = new THREE.MeshPhongMaterial({ color: 0x000000, shininess: 5 });
+    const eyeGeo = new THREE.BoxGeometry(0.08, 0.08, 0.02);
+
+    const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+    const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+
+    eyeL.position.set(0.7, 0.1, 0.18);
+    eyeR.position.set(0.7, 0.1, -0.18);
+
+    eyeL.castShadow = true;
+    eyeR.castShadow = true;
+
+    head.add(eyeL);
+    head.add(eyeR);
+
+    // Pivot da cauda
+    tailPivot = new THREE.Object3D();
+    tailPivot.position.set(-1.6, 1.8, 0);
+    cow.add(tailPivot);
+
+    // Cauda
+    const tailGeo = new THREE.BoxGeometry(0.2, 1, 0.2);
+    tail = new THREE.Mesh(tailGeo, blackMat);
+    tail.position.set(0, -0.5, 0);
+    tail.castShadow = true;
+    tailPivot.add(tail);
+
+    // Pernas
+    const legGeo = new THREE.BoxGeometry(0.5, 1.5, 0.9);
+
+    legFL = new THREE.Mesh(legGeo, blackMat);
+    legFR = new THREE.Mesh(legGeo, blackMat);
+    legBL = new THREE.Mesh(legGeo, blackMat);
+    legBR = new THREE.Mesh(legGeo, blackMat);
+
+    legFL.position.set(1, 0.75, 0.35);
+    legFR.position.set(1, 0.75, -0.35);
+    legBL.position.set(-1, 0.75, 0.35);
+    legBR.position.set(-1, 0.75, -0.35);
+
+    legFL.castShadow = true;
+    legFR.castShadow = true;
+    legBL.castShadow = true;
+    legBR.castShadow = true;
+
+    cow.add(legFL, legFR, legBL, legBR);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const t = clock.getElapsedTime();
+    const speed = 3;
+    const legAmp = 0.4;
+
+    // Cauda
+    if (tailPivot) {
+        tailPivot.rotation.z = Math.sin(t * speed * 2) * 0.6;
+    }
+
+    // Pernas
+    if (legFL && legFR && legBL && legBR) {
+        legFL.rotation.x = Math.sin(t * speed) * legAmp;
+        legBR.rotation.x = Math.sin(t * speed) * legAmp;
+        legFR.rotation.x = Math.sin(t * speed + Math.PI) * legAmp;
+        legBL.rotation.x = Math.sin(t * speed + Math.PI) * legAmp;
+    }
+
+    // Orelhas
+    if (earL && earR) {
+        const earAmp = 0.25;
+        earL.rotation.z = Math.sin(t * speed * 1.5) * earAmp;
+        earR.rotation.z = -Math.sin(t * speed * 1.5) * earAmp;
+    }
+
+    // Salto
+    if (isJumping && cow) {
+        const jumpSpeed = 3;
+        jumpTime += clock.getDelta();
+
+        const jumpHeight = Math.sin(jumpTime * jumpSpeed);
+
+        if (jumpTime * jumpSpeed >= Math.PI) {
+            isJumping = false;
+            jumpTime = 0;
+            cow.position.y = 0;
+        } else {
+            cow.position.y = jumpHeight * 0.8;
+        }
+    }
+
+    // Animação do OVNI
+    if (ufo) {
+        ufo.rotation.y += 0.01;
+        const floatAmp = 0.3;
+        const floatSpeed = 1.5;
+        ufo.position.y = 8 + Math.sin(t * floatSpeed) * floatAmp;
+    }
+
+        // Vaca a flutuar ligeiramente
+    if (cow) {
+        const cowFloatAmp = 0.3;    // altura máxima da flutuação
+        const cowFloatSpeed = 1.5;  // velocidade da flutuação
+        cow.position.y = 0.5 + Math.sin(t * cowFloatSpeed) * cowFloatAmp;
+    }
+
+        renderer.render(scene, activeCamera);
+}
+
+function onWindowResize() {
+    camera1.aspect = window.innerWidth / window.innerHeight;
+    camera1.updateProjectionMatrix();
+    camera2.aspect = window.innerWidth / window.innerHeight;
+    camera2.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+}
+
+function onKeyDown(event) {
+    const key = event.key.toLowerCase();
+    const step = 0.15;
+    const maxAngle = Math.PI / 4;
+    const minAngle = -Math.PI / 4;
+
+    // Cabeça para um lado
+    if (key === 'h') {
+        if (headPivot && headAngleY < maxAngle) {
+            headAngleY += step;
+            if (headAngleY > maxAngle) headAngleY = maxAngle;
+            headPivot.rotation.y = headAngleY;
+        }
+    }
+
+    // Cabeça para o outro lado
+    if (key === 'j') {
+        if (headPivot && headAngleY > minAngle) {
+            headAngleY -= step;
+            if (headAngleY < minAngle) headAngleY = minAngle;
+            headPivot.rotation.y = headAngleY;
+        }
+    }
+
+    if (key === 'c') {
+    activeCamera = (activeCamera === camera1) ? camera2 : camera1;
+}
+
+}
+
+function onMouseDown(event) {
+    // normalizar coordenadas do rato [-1,1]
+    mouse.x =  (event.clientX / window.innerWidth)  * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // raio a partir da câmara
+   raycaster.setFromCamera(mouse, activeCamera);
+
+    // testar interseção com a vaca 
+    if (!cow) return;
+    const intersects = raycaster.intersectObject(cow, true);
+
+    if (intersects.length > 0) {
+        // se clicares na vaca, ativa o salto
+        if (!isJumping) {
+            isJumping = true;
+            jumpTime = 0;
+        }
+    }
+}
+
+</script>
+</body>
+</html>
